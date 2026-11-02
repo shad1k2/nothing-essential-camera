@@ -1,0 +1,1 @@
+-keep class com.shad1k2.essentialshutter.** { *; }
