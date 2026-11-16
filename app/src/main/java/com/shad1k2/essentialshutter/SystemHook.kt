@@ -1,7 +1,9 @@
 package com.shad1k2.essentialshutter
 
 import android.content.ComponentName
-import android.content.Intent
+import android.hardware.input.InputManager
+import android.os.SystemClock
+import android.view.InputDevice
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import de.robv.android.xposed.XC_MethodHook
@@ -10,22 +12,24 @@ import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 /**
- * Nothing OS claims the Essential Key (keyCode 0 / scanCode 250) inside system_server:
- * the policy launches `ntessentialrecorder/.FocusActivity` and the shot goes to
- * Essential Space instead of the gallery.
+ * Nothing OS claims the Essential Key (keyCode 0 / scanCode 250) in PhoneWindowManager:
+ * its policy launches `ntessentialrecorder/.FocusActivity`, which runs the Essential
+ * Space capture flow (that is why the shot goes to Essential Space, not the gallery).
  *
- * The camera app already handles KEYCODE_CAMERA (27) as a real shutter press — its
- * CameraUIContext.onKeyUp() calls simulateKeyDownAndUp() which dispatches touch
- * DOWN/UP to the photo shutter button. So the cleanest fix is to rewrite the
- * Essential Key into KEYCODE_CAMERA in PhoneWindowManager while the camera is in
- * the foreground: Nothing's policy no longer recognizes the key (no Essential Space
- * launch), and the camera receives a normal shutter key.
+ * Replacing the KeyEvent argument of interceptKeyBefore* does NOT work — the event that
+ * reaches the window is created by native InputDispatcher. Instead, while the camera is
+ * in the foreground we swallow the original key at the policy level (result = 0 drops
+ * FLAG_PASS_TO_USER and skips Nothing's policy entirely) and inject a clean
+ * KEYCODE_CAMERA press/release. The camera app then handles it with its own native
+ * shutter path (CameraUIContext.onKeyUp -> simulateKeyDownAndUp).
  *
- * Outside the camera nothing is rewritten, so Essential Space keeps working.
+ * Outside the camera nothing is swallowed, so Essential Space and its screenshots keep
+ * working as usual.
  */
 object SystemHook {
 
     private const val TAG = "[EssShutter]"
+    private var lastTrigger = 0L
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
         val pwm = try {
@@ -37,45 +41,61 @@ object SystemHook {
             return
         }
 
-        val rewrite = object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: XC_MethodHook.MethodHookParam) {
-                val index = param.args.indexOfFirst { it is KeyEvent }
-                if (index < 0) return
-                val event = param.args[index] as KeyEvent
-                if (event.scanCode != MainHook.SCAN_ESSENTIAL) return
+        XposedBridge.hookAllMethods(
+            pwm,
+            "interceptKeyBeforeQueueing",
+            object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: XC_MethodHook.MethodHookParam) {
+                    val event = param.args.firstOrNull { it is KeyEvent } as? KeyEvent ?: return
+                    if (event.scanCode != MainHook.SCAN_ESSENTIAL) return
 
-                val camera = isCameraForeground()
-                XposedBridge.log(
-                    "$TAG PWM ${param.method.name}: key=${event.keyCode} " +
-                            "scan=${event.scanCode} action=${event.action}, " +
-                            "camera foreground=$camera"
-                )
-                if (!camera) return // Essential Space handles it as usual
+                    val camera = isCameraForeground()
+                    XposedBridge.log(
+                        "$TAG PWM interceptKeyBeforeQueueing: key=${event.keyCode} " +
+                                "scan=${event.scanCode} action=${event.action}, " +
+                                "camera foreground=$camera"
+                    )
+                    if (!camera) return // Essential Space handles the key as usual
 
-                param.args[index] = cameraKey(event)
-                XposedBridge.log("$TAG rewritten Essential Key -> KEYCODE_CAMERA")
-            }
+                    // Skip the original policy (no FocusActivity launch) and drop the
+                    // event before it can be dispatched to any window.
+                    param.result = 0
+                    triggerShutter()
+                }
+            })
+        XposedBridge.log("$TAG hooked interceptKeyBeforeQueueing")
+    }
+
+    /** Inject a synthetic KEYCODE_CAMERA pair into the focused window (the camera). */
+    private fun triggerShutter() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastTrigger < 300) {
+            XposedBridge.log("$TAG trigger throttled")
+            return
         }
+        lastTrigger = now
 
-        // Rewrite as early as possible: before queueing (policy decision) and before
-        // dispatch (the event that actually reaches the focused window).
-        for (name in listOf("interceptKeyBeforeQueueing", "interceptKeyBeforeDispatching")) {
-            val count = XposedBridge.hookAllMethods(pwm, name, rewrite)
-            XposedBridge.log("$TAG hooked $name ($count overloads)")
+        try {
+            val im = XposedHelpers.callStaticMethod(InputManager::class.java, "getInstance")
+            XposedHelpers.callMethod(im, "injectInputEvent", cameraKey(KeyEvent.ACTION_DOWN, now), 0)
+            XposedHelpers.callMethod(im, "injectInputEvent", cameraKey(KeyEvent.ACTION_UP, now), 0)
+            XposedBridge.log("$TAG injected KEYCODE_CAMERA into the focused window")
+        } catch (t: Throwable) {
+            XposedBridge.log("$TAG injection failed: ${t.message}")
         }
     }
 
-    private fun cameraKey(ev: KeyEvent) = KeyEvent(
-        ev.downTime,
-        ev.eventTime,
-        ev.action,
+    private fun cameraKey(action: Int, now: Long) = KeyEvent(
+        now,
+        now,
+        action,
         KeyEvent.KEYCODE_CAMERA,
-        ev.repeatCount,
-        ev.metaState,
+        0,
+        0,
         KeyCharacterMap.VIRTUAL_KEYBOARD,
-        0, // scanCode: do not let Nothing's policy recognize the Essential Key
-        ev.flags,
-        ev.source,
+        0, // scanCode 0: not an Essential Key
+        0,
+        InputDevice.SOURCE_KEYBOARD,
     )
 
     private fun isCameraForeground(): Boolean = topActivityPackage() == MainHook.CAMERA_PACKAGE
