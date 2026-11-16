@@ -4,7 +4,7 @@
 
 Xposed (LSPosed) module that turns the **Essential Key** on Nothing Phone (3a / 3a Pro)
 into a real camera **shutter button** inside the Nothing Camera app — the way
-iPhone's Camera Control behaves (light press focuses, full press takes the photo).
+iPhone's Camera Control behaves: short press takes a photo, holding records video.
 
 Nothing OS 3.1+ can already capture a frame with the Essential Key, but the shot goes
 to **Essential Space**, not to the gallery. This module sends the shot to the normal
@@ -32,9 +32,11 @@ So the module hooks only one thing:
    work — the event delivered to windows is recreated by native `InputDispatcher`.
    Outside the camera the key is left untouched, so Essential Space and its screenshots
    keep working as usual.
-2. **`com.nothing.camera` — `Activity.dispatchKeyEvent`** — read-only observer that logs
-   the arrival of the injected key. It deliberately does not consume the event or click
-   any view: the app's own native shutter path handles it.
+2. **`com.nothing.camera` — `Activity.dispatchKeyEvent`** — translates the injected key
+   into real touch DOWN/UP events on the camera's `ShutterButton` (found by class name,
+   not by resource id). Because the app's own listener sees those touches, a short press
+   takes a photo and holding the key starts quick-record video. The key itself is
+   consumed here so the app's separate `KEYCODE_CAMERA` handler does not fire twice.
 
 ## Requirements
 

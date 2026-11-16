@@ -16,12 +16,12 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
  * its policy launches `ntessentialrecorder/.FocusActivity`, which runs the Essential
  * Space capture flow (that is why the shot goes to Essential Space, not the gallery).
  *
- * Replacing the KeyEvent argument of interceptKeyBefore* does NOT work — the event that
- * reaches the window is created by native InputDispatcher. Instead, while the camera is
- * in the foreground we swallow the original key at the policy level (result = 0 drops
- * FLAG_PASS_TO_USER and skips Nothing's policy entirely) and inject a clean
- * KEYCODE_CAMERA press/release. The camera app then handles it with its own native
- * shutter path (CameraUIContext.onKeyUp -> simulateKeyDownAndUp).
+ * Replacing the KeyEvent argument does NOT work — the event delivered to windows is
+ * recreated by native InputDispatcher. Instead, while the camera is in the foreground
+ * we swallow the original key at policy level (result = 0 drops FLAG_PASS_TO_USER and
+ * skips Nothing's policy entirely) and inject a clean KEYCODE_CAMERA event matching the
+ * physical action: DOWN on press, UP on release. [CameraHook] translates those into real
+ * touch events on the camera's shutter button, so short press = photo, hold = video.
  *
  * Outside the camera nothing is swallowed, so Essential Space and its screenshots keep
  * working as usual.
@@ -29,7 +29,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 object SystemHook {
 
     private const val TAG = "[EssShutter]"
-    private var lastTrigger = 0L
+    private var lastDown = 0L
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
         val pwm = try {
@@ -57,46 +57,41 @@ object SystemHook {
                     )
                     if (!camera) return // Essential Space handles the key as usual
 
-                    // Skip the original policy (no FocusActivity launch) and drop the
+                    // Skip Nothing's policy (no FocusActivity launch) and drop the
                     // event before it can be dispatched to any window.
                     param.result = 0
-                    triggerShutter()
+                    injectCameraKey(event.action)
                 }
             })
         XposedBridge.log("$TAG hooked interceptKeyBeforeQueueing")
     }
 
-    /** Inject a synthetic KEYCODE_CAMERA pair into the focused window (the camera). */
-    private fun triggerShutter() {
+    /** Inject one KEYCODE_CAMERA event, preserving the physical press/release timing. */
+    private fun injectCameraKey(action: Int) {
         val now = SystemClock.uptimeMillis()
-        if (now - lastTrigger < 300) {
-            XposedBridge.log("$TAG trigger throttled")
-            return
+        if (action == KeyEvent.ACTION_DOWN) {
+            if (now - lastDown < 250) {
+                XposedBridge.log("$TAG down throttled")
+                return
+            }
+            lastDown = now
         }
-        lastTrigger = now
-
         try {
             val im = XposedHelpers.callStaticMethod(InputManager::class.java, "getInstance")
-            XposedHelpers.callMethod(im, "injectInputEvent", cameraKey(KeyEvent.ACTION_DOWN, now), 0)
-            XposedHelpers.callMethod(im, "injectInputEvent", cameraKey(KeyEvent.ACTION_UP, now), 0)
-            XposedBridge.log("$TAG injected KEYCODE_CAMERA into the focused window")
+            XposedHelpers.callMethod(
+                im,
+                "injectInputEvent",
+                KeyEvent(
+                    now, now, action, KeyEvent.KEYCODE_CAMERA, 0, 0,
+                    KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD
+                ),
+                0
+            )
+            XposedBridge.log("$TAG injected KEYCODE_CAMERA action=$action")
         } catch (t: Throwable) {
             XposedBridge.log("$TAG injection failed: ${t.message}")
         }
     }
-
-    private fun cameraKey(action: Int, now: Long) = KeyEvent(
-        now,
-        now,
-        action,
-        KeyEvent.KEYCODE_CAMERA,
-        0,
-        0,
-        KeyCharacterMap.VIRTUAL_KEYBOARD,
-        0, // scanCode 0: not an Essential Key
-        0,
-        InputDevice.SOURCE_KEYBOARD,
-    )
 
     private fun isCameraForeground(): Boolean = topActivityPackage() == MainHook.CAMERA_PACKAGE
 
