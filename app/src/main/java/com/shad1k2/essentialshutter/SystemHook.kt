@@ -8,6 +8,7 @@ import android.view.InputDevice
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import de.robv.android.xposed.XC_MethodHook
+import de.robv.android.xposed.XC_MethodHook.MethodHookParam
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
@@ -56,6 +57,7 @@ object SystemHook {
 
                 if (!camera) return // let Essential Space do its thing
 
+                logLaunchCaller()
                 if ((param.method as java.lang.reflect.Method).returnType != Int::class.javaPrimitiveType) {
                     XposedBridge.log(
                         "$TAG cannot cancel ${param.method.name}: non-int return type"
@@ -72,6 +74,49 @@ object SystemHook {
             val count = XposedBridge.hookAllMethods(atms, name, intercept)
             XposedBridge.log("$TAG hooked $name ($count overloads)")
         }
+
+        logKeyPipeline(lpparam)
+    }
+
+    /** Read-only probes: do the Essential Key events reach PhoneWindowManager at all? */
+    private fun logKeyPipeline(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            val pwm = XposedHelpers.findClass(
+                "com.android.server.policy.PhoneWindowManager", lpparam.classLoader
+            )
+            for (name in listOf("interceptKeyBeforeQueueing", "interceptKeyBeforeDispatching")) {
+                XposedBridge.hookAllMethods(pwm, name, object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val ev = param.args.firstOrNull { it is KeyEvent } as? KeyEvent ?: return
+                        if (ev.keyCode != KeyEvent.KEYCODE_UNKNOWN &&
+                            ev.scanCode != MainHook.SCAN_ESSENTIAL
+                        ) return
+                        XposedBridge.log(
+                            "$TAG PWM $name: key=${ev.keyCode} scan=${ev.scanCode} " +
+                                    "action=${ev.action} flags=${ev.flags}"
+                        )
+                    }
+                })
+            }
+            XposedBridge.log("$TAG hooked PhoneWindowManager key probes")
+        } catch (t: Throwable) {
+            XposedBridge.log("$TAG PhoneWindowManager probe failed: ${t.message}")
+        }
+    }
+
+    /** Shows who in system_server actually starts the Essential Space activity. */
+    private fun logLaunchCaller() {
+        val frames = Thread.currentThread().stackTrace
+            .asSequence()
+            .map { "${it.className}.${it.methodName}" }
+            .filter {
+                it.contains("server", true) || it.contains("nothing", true) ||
+                        it.contains("policy", true) || it.contains("Window", true) ||
+                        it.contains("Key", true) || it.contains("Input", true)
+            }
+            .take(12)
+            .toList()
+        XposedBridge.log("$TAG launch caller: ${frames.joinToString(" <- ")}")
     }
 
     private fun isEssentialLaunch(component: ComponentName?): Boolean {
