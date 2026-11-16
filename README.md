@@ -12,22 +12,27 @@ camera pipeline instead.
 
 ## How it works
 
-Device logs showed that Nothing OS consumes the Essential Key inside **`system_server`**:
-the key handler launches `com.nothing.ntessentialrecorder/.FocusActivity`, a transparent
-activity that runs the Essential Space capture flow (which is why the shot never lands in
-the gallery). Rewriting the key code in `PhoneWindowManager` alone does not help — the
-launch still happens and steals the capture.
+The Essential Key arrives as `keyCode = 0` (`KEYCODE_UNKNOWN`) with `scanCode = 250`.
+Nothing OS's policy recognizes that scan code in `PhoneWindowManager` and launches
+`com.nothing.ntessentialrecorder/.FocusActivity`, which runs the Essential Space capture
+flow — that is why the shot never reaches the gallery.
 
-The module therefore hooks:
+Nothing Camera already knows how to handle `KEYCODE_CAMERA` natively: `CameraUIContext`
+(`isKeyCodeNeedCaptrue(27)` → `onKeyUp()` → `simulateKeyDownAndUp()`) dispatches real
+touch DOWN/UP events to the photo shutter button — exactly the same path as tapping the
+shutter on screen.
 
-1. **`system_server` — `ActivityTaskManagerService.startActivity*`** — when the system
-   tries to launch `FocusActivity` of `ntessentialrecorder` / `ntessentialspace` **while
-   the Nothing Camera is in the foreground**, the launch is cancelled and a synthetic
-   `KEYCODE_CAMERA` press/release pair is injected into the focused window (the camera).
-   Outside the camera the launch proceeds as usual, so Essential Space keeps working.
-2. **`com.nothing.camera` — `Activity.dispatchKeyEvent`** — handles the injected key:
-   `ACTION_DOWN` focuses, `ACTION_UP` finds the shutter button in the view hierarchy
-   and calls `performClick()`.
+So the module hooks only one thing:
+
+1. **`system_server` — `PhoneWindowManager.interceptKeyBeforeQueueing` and
+   `interceptKeyBeforeDispatching`** — while the Nothing Camera is in the foreground,
+   the Essential Key event is rewritten to `KEYCODE_CAMERA` with `scanCode = 0`. Nothing's
+   policy no longer recognizes it (no Essential Space launch), and the camera receives a
+   normal shutter key. Outside the camera nothing is rewritten, so Essential Space and
+   its screenshots keep working as usual.
+2. **`com.nothing.camera` — `Activity.dispatchKeyEvent`** — read-only observer that logs
+   the arrival of the rewritten key. It deliberately does not consume the event or click
+   any view: the app's own native shutter path handles it.
 
 ## Requirements
 
@@ -85,10 +90,10 @@ Look for the `gpio-keys` input device and check that its key code is `250`.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Button does nothing in camera | the launch hook did not fire | check LSPosed logs for `[EssShutter] Essential launch` — if absent, the launch entry point on your firmware differs (look for `startActivityWithFeature` / new AIDL overloads) |
+| Button does nothing in camera | key not rewritten | check logs for `[EssShutter] PWM interceptKeyBeforeQueueing: key=0 scan=250 ... camera foreground=true` followed by `rewritten Essential Key -> KEYCODE_CAMERA` |
 | Log says "camera foreground=false" | the camera was not the top task | open the camera, wait a second, press again |
-| Log says "shutter button not found" | wrong resource id | decompile `com.nothing.camera` and adapt `findShutter()` |
-| Photo lands in Essential Space instead of gallery | the launch was not cancelled | check that the log shows `camera foreground=true` and `injected KEYCODE_CAMERA` |
+| Log says "camera received KEYCODE_CAMERA" but no photo | the app's native shutter path is blocked | make sure no other module consumes the key; check the camera's own logcat for `simulateKeyDownAndUp` |
+| Photo lands in Essential Space instead of gallery | the key still reaches Nothing's policy | verify the rewritten key has `scanCode=0`; if the ROM matches on other fields, adapt `cameraKey()` in `SystemHook` |
 | Nothing happens at all | system_server hooks not applied | make sure LSPosed scope includes `system` / `android` and reboot after enabling |
 
 ## License
