@@ -34,6 +34,7 @@ object SystemHook {
     private var lastDown = 0L
     private var downInjected = false
     private var pendingDown: Runnable? = null
+    private var pressReset: Runnable? = null
     private var essentialHeld = false
     private var context: Context? = null
 
@@ -84,7 +85,10 @@ object SystemHook {
         val now = SystemClock.uptimeMillis()
         if (ev.action == KeyEvent.ACTION_DOWN) {
             essentialHeld = true
-            pressCount = if (now - lastDown < DOUBLE_WINDOW_MS) pressCount + 1 else 1
+            if (pressReset == null) pressCount = 0 // previous press window has expired
+            pressReset?.let { handler.removeCallbacks(it) }
+            pressReset = null
+            pressCount += 1
             lastDown = now
             XposedBridge.log("$TAG Essential DOWN, pressCount=$pressCount, camera=$camera")
 
@@ -114,7 +118,11 @@ object SystemHook {
                 if (!downInjected) inject(KeyEvent.ACTION_DOWN) // very short tap
                 inject(KeyEvent.ACTION_UP)
             }
-            pressCount = 0
+            pressReset?.let { handler.removeCallbacks(it) }
+            pressReset = Runnable {
+                pressCount = 0
+                pressReset = null
+            }.also { handler.postDelayed(it, DOUBLE_WINDOW_MS) }
             downInjected = false
         }
     }

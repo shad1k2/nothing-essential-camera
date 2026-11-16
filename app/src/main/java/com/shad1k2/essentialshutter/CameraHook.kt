@@ -172,18 +172,31 @@ object CameraHook {
         ev.recycle()
     }
 
-    /** Find the real ShutterButton by class name, with an id/description fallback. */
+    /**
+     * Find the photo shutter. IMPORTANT: Nothing Camera implements the switch-camera
+     * button with the same ShutterButton class (id `switch_camera_facing`), so the
+     * resource id is the reliable discriminator — never pick a "switch" view.
+     */
     private fun findShutter(root: View): View? {
-        var classHit: View? = null
-        var nameHit: View? = null
+        var photoHit: View? = null
+        var classFallback: View? = null
 
         fun walk(v: View) {
-            if (v.visibility == View.VISIBLE) {
-                val simpleName = v.javaClass.simpleName
-                if (v.javaClass.name == SHUTTER_CLASS || simpleName.endsWith("ShutterButton")) {
-                    classHit = v
-                } else if (matchesName(v)) {
-                    nameHit = v
+            if (v.visibility == View.VISIBLE && isShutterClass(v)) {
+                val id = try {
+                    v.resources.getResourceEntryName(v.id)
+                } catch (t: Throwable) {
+                    ""
+                }
+                if (id.contains("switch", true) || id.contains("flip", true)) {
+                    // never treat the camera-switch control as the shutter
+                } else if (id.contains("photo", true) ||
+                    id.contains("shutter", true) ||
+                    id.contains("capture", true)
+                ) {
+                    photoHit = v
+                } else if (classFallback == null) {
+                    classFallback = v
                 }
             }
             if (v is ViewGroup) {
@@ -192,20 +205,14 @@ object CameraHook {
         }
 
         walk(root)
-        return classHit ?: nameHit
+        val result = photoHit ?: classFallback
+        XposedBridge.log("[EssShutter] shutter candidate: ${result?.javaClass?.simpleName} id=${result?.let {
+            try { it.resources.getResourceEntryName(it.id) } catch (t: Throwable) { "?" }
+        }}")
+        return result
     }
 
-    private fun matchesName(v: View): Boolean {
-        if (!v.isClickable || !v.isEnabled) return false
-        val name = try {
-            v.resources.getResourceEntryName(v.id)
-        } catch (t: Throwable) {
-            ""
-        }
-        val desc = v.contentDescription?.toString()?.lowercase() ?: ""
-        return name.contains("shutter", true) ||
-                name.contains("capture", true) ||
-                desc.contains("shutter") ||
-                desc.contains("capture")
-    }
+    private fun isShutterClass(v: View): Boolean =
+        v.javaClass.name == SHUTTER_CLASS || v.javaClass.simpleName.endsWith("ShutterButton")
+
 }

@@ -68,7 +68,7 @@ class SettingsActivity : Activity() {
         )
         volumeZoom = switch(
             "While the key is held: volume buttons = zoom",
-            p.getBoolean(Prefs.KEY_VOLUME_ZOOM, true)
+            p.getBoolean(Prefs.KEY_VOLUME_ZOOM, false)
         )
 
         val save = Button(this).apply {
@@ -81,6 +81,7 @@ class SettingsActivity : Activity() {
                     .putInt(Prefs.KEY_LONG, longAction.selectedItemPosition)
                     .putInt(Prefs.KEY_DOUBLE, doubleAction.selectedItemPosition)
                     .putBoolean(Prefs.KEY_VOLUME_ZOOM, volumeZoom.isChecked)
+                    .putInt(Prefs.KEY_CONFIG_VERSION, Prefs.CURRENT_VERSION)
                     .apply()
                 Toast.makeText(this@SettingsActivity, "Saved", Toast.LENGTH_SHORT).show()
                 finish()
