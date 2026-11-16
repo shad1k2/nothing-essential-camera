@@ -56,7 +56,7 @@ object SystemHook {
 
                 if (!camera) return // let Essential Space do its thing
 
-                if (param.method.returnType != Int::class.javaPrimitiveType) {
+                if ((param.method as java.lang.reflect.Method).returnType != Int::class.javaPrimitiveType) {
                     XposedBridge.log(
                         "$TAG cannot cancel ${param.method.name}: non-int return type"
                     )
