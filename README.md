@@ -38,6 +38,19 @@ So the module hooks only one thing:
    takes a photo and holding the key starts quick-record video. The key itself is
    consumed here so the app's separate `KEYCODE_CAMERA` handler does not fire twice.
 
+## Settings
+
+Open the module from LSPosed (tap its name → **Launch**) to configure:
+
+- **Module enabled** — master switch
+- **Only remap while the camera is in the foreground** — keep Essential Space (screenshots etc.) everywhere else
+- **Short press** — photo or focus only
+- **Hold** — record video or nothing
+- **Double press** — switch camera or zoom in
+- **While the key is held: volume buttons = zoom** — the volume rocker becomes a virtual zoom slider
+
+Force-stop the camera app after changing settings.
+
 ## Requirements
 
 - Nothing Phone with the Essential Key: **3a**, **3a Pro** (and other models where the
