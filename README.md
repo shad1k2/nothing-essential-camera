@@ -1,5 +1,7 @@
 # Nothing Essential Camera
 
+[![Android CI](https://github.com/shad1k2/nothing-essential-camera/actions/workflows/android.yml/badge.svg)](https://github.com/shad1k2/nothing-essential-camera/actions/workflows/android.yml)
+
 Xposed (LSPosed) module that turns the **Essential Key** on Nothing Phone (3a / 3a Pro)
 into a real camera **shutter button** inside the Nothing Camera app — the way
 iPhone's Camera Control behaves (light press focuses, full press takes the photo).
@@ -10,15 +12,20 @@ camera pipeline instead.
 
 ## How it works
 
-The Essential Key enters the input pipeline as `keyCode = 0` (`KEYCODE_UNKNOWN`) with
-`scanCode = 250`, and Nothing OS claims the single press at the **system policy** level,
-so the event never reaches the camera app.
+Device logs showed that Nothing OS consumes the Essential Key inside **`system_server`**:
+the key handler launches `com.nothing.ntessentialrecorder/.FocusActivity`, a transparent
+activity that runs the Essential Space capture flow (which is why the shot never lands in
+the gallery). Rewriting the key code in `PhoneWindowManager` alone does not help — the
+launch still happens and steals the capture.
 
-The module therefore hooks two places:
+The module therefore hooks:
 
-1. **`system_server`** — `PhoneWindowManager.interceptKeyBeforeDispatching` rewrites the
-   event to `KEYCODE_CAMERA` (27), but only while the Nothing Camera is in the foreground.
-2. **`com.nothing.camera`** — `Activity.dispatchKeyEvent` handles the rewritten key:
+1. **`system_server` — `ActivityTaskManagerService.startActivity*`** — when the system
+   tries to launch `FocusActivity` of `ntessentialrecorder` / `ntessentialspace` **while
+   the Nothing Camera is in the foreground**, the launch is cancelled and a synthetic
+   `KEYCODE_CAMERA` press/release pair is injected into the focused window (the camera).
+   Outside the camera the launch proceeds as usual, so Essential Space keeps working.
+2. **`com.nothing.camera` — `Activity.dispatchKeyEvent`** — handles the injected key:
    `ACTION_DOWN` focuses, `ACTION_UP` finds the shutter button in the view hierarchy
    and calls `performClick()`.
 
@@ -31,8 +38,9 @@ The module therefore hooks two places:
 
 ## Preparation on the phone
 
-Nothing OS holds the single press via the Essential Space packages. Disable them
-(nothing is deleted, only for user 0):
+The module cancels the Essential Space launch itself, so disabling the Essential Space
+packages is **optional** — do it only if you want the key to do nothing outside the
+camera as well (nothing is deleted, only for user 0):
 
 ```bash
 adb shell pm disable-user --user 0 com.nothing.ntessentialspace
@@ -77,10 +85,11 @@ Look for the `gpio-keys` input device and check that its key code is `250`.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Button does nothing in camera | system policy eats the event | make sure the Essential Space packages are disabled |
+| Button does nothing in camera | the launch hook did not fire | check LSPosed logs for `[EssShutter] Essential launch` — if absent, the launch entry point on your firmware differs (look for `startActivityWithFeature` / new AIDL overloads) |
+| Log says "camera foreground=false" | the camera was not the top task | open the camera, wait a second, press again |
 | Log says "shutter button not found" | wrong resource id | decompile `com.nothing.camera` and adapt `findShutter()` |
-| Photo lands in Essential Space instead of gallery | Nothing recorder still active | disable `com.nothing.ntessentialrecorder` too |
-| Nothing happens at all | wrong scan code on your firmware | log the scan code and update `MainHook.SCAN_ESSENTIAL` |
+| Photo lands in Essential Space instead of gallery | the launch was not cancelled | check that the log shows `camera foreground=true` and `injected KEYCODE_CAMERA` |
+| Nothing happens at all | system_server hooks not applied | make sure LSPosed scope includes `system` / `android` and reboot after enabling |
 
 ## License
 
