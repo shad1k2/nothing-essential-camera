@@ -106,11 +106,17 @@ object SystemHook {
                     Class.forName(className), fieldName
                 )
                 val service = XposedHelpers.callMethod(singleton, "get")
-                val slice = XposedHelpers.callMethod(service, "getTasks", 1)
-                val list = XposedHelpers.callMethod(slice, "getList") as? List<*> ?: continue
+                val tasks = XposedHelpers.callMethod(service, "getTasks", 1)
+                // AOSP returns ParceledListSlice, but some vendor ROMs hand back a
+                // plain ArrayList — handle both.
+                val list = when (tasks) {
+                    is List<*> -> tasks
+                    else -> XposedHelpers.callMethod(tasks, "getList") as? List<*> ?: continue
+                }
                 val task = list.firstOrNull() ?: continue
                 val top = XposedHelpers.getObjectField(task, "topActivity") as? ComponentName
                     ?: continue
+                XposedBridge.log("$TAG top activity: ${top.packageName}")
                 return top.packageName
             } catch (t: Throwable) {
                 XposedBridge.log("$TAG top-activity via $className failed: ${t.message}")
