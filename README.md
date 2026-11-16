@@ -24,14 +24,16 @@ shutter on screen.
 
 So the module hooks only one thing:
 
-1. **`system_server` — `PhoneWindowManager.interceptKeyBeforeQueueing` and
-   `interceptKeyBeforeDispatching`** — while the Nothing Camera is in the foreground,
-   the Essential Key event is rewritten to `KEYCODE_CAMERA` with `scanCode = 0`. Nothing's
-   policy no longer recognizes it (no Essential Space launch), and the camera receives a
-   normal shutter key. Outside the camera nothing is rewritten, so Essential Space and
-   its screenshots keep working as usual.
+1. **`system_server` — `PhoneWindowManager.interceptKeyBeforeQueueing`** — while the
+   Nothing Camera is in the foreground, the Essential Key is swallowed at the policy
+   level (`result = 0` drops `FLAG_PASS_TO_USER` and skips Nothing's own handler), so no
+   `FocusActivity` is launched. A clean `KEYCODE_CAMERA` press/release is then injected
+   into the focused window (the camera). Replacing the `KeyEvent` argument does **not**
+   work — the event delivered to windows is recreated by native `InputDispatcher`.
+   Outside the camera the key is left untouched, so Essential Space and its screenshots
+   keep working as usual.
 2. **`com.nothing.camera` — `Activity.dispatchKeyEvent`** — read-only observer that logs
-   the arrival of the rewritten key. It deliberately does not consume the event or click
+   the arrival of the injected key. It deliberately does not consume the event or click
    any view: the app's own native shutter path handles it.
 
 ## Requirements
@@ -90,10 +92,10 @@ Look for the `gpio-keys` input device and check that its key code is `250`.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Button does nothing in camera | key not rewritten | check logs for `[EssShutter] PWM interceptKeyBeforeQueueing: key=0 scan=250 ... camera foreground=true` followed by `rewritten Essential Key -> KEYCODE_CAMERA` |
+| Button does nothing in camera | key not swallowed / injection failed | check logs for `[EssShutter] PWM interceptKeyBeforeQueueing: key=0 scan=250 ... camera foreground=true` followed by `injected KEYCODE_CAMERA` and `camera received KEYCODE_CAMERA` |
 | Log says "camera foreground=false" | the camera was not the top task | open the camera, wait a second, press again |
 | Log says "camera received KEYCODE_CAMERA" but no photo | the app's native shutter path is blocked | make sure no other module consumes the key; check the camera's own logcat for `simulateKeyDownAndUp` |
-| Photo lands in Essential Space instead of gallery | the key still reaches Nothing's policy | verify the rewritten key has `scanCode=0`; if the ROM matches on other fields, adapt `cameraKey()` in `SystemHook` |
+| Photo lands in Essential Space instead of gallery | the policy still sees the key | verify the log shows `camera foreground=true` and that no `FocusActivity` launch follows the press |
 | Nothing happens at all | system_server hooks not applied | make sure LSPosed scope includes `system` / `android` and reboot after enabling |
 
 ## License
