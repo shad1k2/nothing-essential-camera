@@ -2,144 +2,85 @@ package com.shad1k2.essentialshutter
 
 import android.content.ComponentName
 import android.content.Intent
-import android.hardware.input.InputManager
-import android.os.SystemClock
-import android.view.InputDevice
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XC_MethodHook.MethodHookParam
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 /**
- * Nothing OS consumes the Essential Key inside system_server: the key handler starts
- * `com.nothing.ntessentialrecorder/.FocusActivity`, a transparent activity that runs the
- * Essential Space capture flow (which is why the shot never lands in the gallery).
+ * Nothing OS claims the Essential Key (keyCode 0 / scanCode 250) inside system_server:
+ * the policy launches `ntessentialrecorder/.FocusActivity` and the shot goes to
+ * Essential Space instead of the gallery.
  *
- * Strategy:
- *  1. Hook the activity-launch entry points of `ActivityTaskManagerService`. When the
- *     system tries to start `FocusActivity` of an Essential Space package **and the
- *     Nothing Camera is in the foreground**, cancel the launch.
- *  2. Inject a synthetic `KEYCODE_CAMERA` press/release pair into the focused window —
- *     the camera app — which `CameraHook` then translates into focus + shutter.
+ * The camera app already handles KEYCODE_CAMERA (27) as a real shutter press — its
+ * CameraUIContext.onKeyUp() calls simulateKeyDownAndUp() which dispatches touch
+ * DOWN/UP to the photo shutter button. So the cleanest fix is to rewrite the
+ * Essential Key into KEYCODE_CAMERA in PhoneWindowManager while the camera is in
+ * the foreground: Nothing's policy no longer recognizes the key (no Essential Space
+ * launch), and the camera receives a normal shutter key.
  *
- * Outside the camera the launch proceeds untouched, so Essential Space keeps working.
+ * Outside the camera nothing is rewritten, so Essential Space keeps working.
  */
 object SystemHook {
 
     private const val TAG = "[EssShutter]"
 
-    /** De-dupe guard: the system may fire several launches for one key press. */
-    private var lastTrigger = 0L
-
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val atms = try {
+        val pwm = try {
             XposedHelpers.findClass(
-                "com.android.server.wm.ActivityTaskManagerService",
-                lpparam.classLoader
+                "com.android.server.policy.PhoneWindowManager", lpparam.classLoader
             )
         } catch (t: Throwable) {
-            XposedBridge.log("$TAG ActivityTaskManagerService not found: ${t.message}")
+            XposedBridge.log("$TAG PhoneWindowManager not found: ${t.message}")
             return
         }
 
-        val intercept = object : XC_MethodHook() {
+        val rewrite = object : XC_MethodHook() {
             override fun beforeHookedMethod(param: XC_MethodHook.MethodHookParam) {
-                val intent = param.args.firstOrNull { it is Intent } as? Intent ?: return
-                if (!isEssentialLaunch(intent.component)) return
+                val index = param.args.indexOfFirst { it is KeyEvent }
+                if (index < 0) return
+                val event = param.args[index] as KeyEvent
+                if (event.scanCode != MainHook.SCAN_ESSENTIAL) return
 
                 val camera = isCameraForeground()
                 XposedBridge.log(
-                    "$TAG Essential launch -> ${intent.component}, camera foreground=$camera"
+                    "$TAG PWM ${param.method.name}: key=${event.keyCode} " +
+                            "scan=${event.scanCode} action=${event.action}, " +
+                            "camera foreground=$camera"
                 )
+                if (!camera) return // Essential Space handles it as usual
 
-                if (!camera) return // let Essential Space do its thing
-
-                logLaunchCaller()
-                if ((param.method as java.lang.reflect.Method).returnType != Int::class.javaPrimitiveType) {
-                    XposedBridge.log(
-                        "$TAG cannot cancel ${param.method.name}: non-int return type"
-                    )
-                    return
-                }
-                param.result = startCanceled()
-                triggerShutter()
+                param.args[index] = cameraKey(event)
+                XposedBridge.log("$TAG rewritten Essential Key -> KEYCODE_CAMERA")
             }
         }
 
-        // Cover the binder entry point and the variants used across Android 11-15.
-        for (name in listOf("startActivity", "startActivityAsUser", "startActivityWithFeature")) {
-            val count = XposedBridge.hookAllMethods(atms, name, intercept)
+        // Rewrite as early as possible: before queueing (policy decision) and before
+        // dispatch (the event that actually reaches the focused window).
+        for (name in listOf("interceptKeyBeforeQueueing", "interceptKeyBeforeDispatching")) {
+            val count = XposedBridge.hookAllMethods(pwm, name, rewrite)
             XposedBridge.log("$TAG hooked $name ($count overloads)")
         }
-
-        logKeyPipeline(lpparam)
     }
 
-    /** Read-only probes: do the Essential Key events reach PhoneWindowManager at all? */
-    private fun logKeyPipeline(lpparam: XC_LoadPackage.LoadPackageParam) {
-        try {
-            val pwm = XposedHelpers.findClass(
-                "com.android.server.policy.PhoneWindowManager", lpparam.classLoader
-            )
-            for (name in listOf("interceptKeyBeforeQueueing", "interceptKeyBeforeDispatching")) {
-                XposedBridge.hookAllMethods(pwm, name, object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val ev = param.args.firstOrNull { it is KeyEvent } as? KeyEvent ?: return
-                        if (ev.keyCode != KeyEvent.KEYCODE_UNKNOWN &&
-                            ev.scanCode != MainHook.SCAN_ESSENTIAL
-                        ) return
-                        XposedBridge.log(
-                            "$TAG PWM $name: key=${ev.keyCode} scan=${ev.scanCode} " +
-                                    "action=${ev.action} flags=${ev.flags}"
-                        )
-                    }
-                })
-            }
-            XposedBridge.log("$TAG hooked PhoneWindowManager key probes")
-        } catch (t: Throwable) {
-            XposedBridge.log("$TAG PhoneWindowManager probe failed: ${t.message}")
-        }
-    }
-
-    /** Shows who in system_server actually starts the Essential Space activity. */
-    private fun logLaunchCaller() {
-        val frames = Thread.currentThread().stackTrace
-            .asSequence()
-            .map { "${it.className}.${it.methodName}" }
-            .filter {
-                it.contains("server", true) || it.contains("nothing", true) ||
-                        it.contains("policy", true) || it.contains("Window", true) ||
-                        it.contains("Key", true) || it.contains("Input", true)
-            }
-            .take(12)
-            .toList()
-        XposedBridge.log("$TAG launch caller: ${frames.joinToString(" <- ")}")
-    }
-
-    private fun isEssentialLaunch(component: ComponentName?): Boolean {
-        if (component == null) return false
-        return (component.packageName == MainHook.RECORDER_PACKAGE ||
-                component.packageName == MainHook.SPACE_PACKAGE) &&
-                component.className.endsWith(MainHook.FOCUS_ACTIVITY)
-    }
-
-    private fun startCanceled(): Int = try {
-        XposedHelpers.getStaticIntField(
-            Class.forName("android.app.ActivityManager"), "START_CANCELED"
-        )
-    } catch (t: Throwable) {
-        -1 // START_INTENT_NOT_RESOLVED
-    }
+    private fun cameraKey(ev: KeyEvent) = KeyEvent(
+        ev.downTime,
+        ev.eventTime,
+        ev.action,
+        KeyEvent.KEYCODE_CAMERA,
+        ev.repeatCount,
+        ev.metaState,
+        KeyCharacterMap.VIRTUAL_KEYBOARD,
+        0, // scanCode: do not let Nothing's policy recognize the Essential Key
+        ev.flags,
+        ev.source,
+    )
 
     private fun isCameraForeground(): Boolean = topActivityPackage() == MainHook.CAMERA_PACKAGE
 
-    /**
-     * Top-of-stack package, resolved inside system_server. `IActivityTaskManager.getTasks`
-     * exists since Android 11; `IActivityManager.getTasks` is the pre-R fallback.
-     */
+    /** Top-of-stack package resolved inside system_server. */
     private fun topActivityPackage(): String? {
         val sources = listOf(
             "android.app.ActivityTaskManager" to "IActivityTaskManagerSingleton",
@@ -152,8 +93,7 @@ object SystemHook {
                 )
                 val service = XposedHelpers.callMethod(singleton, "get")
                 val tasks = XposedHelpers.callMethod(service, "getTasks", 1)
-                // AOSP returns ParceledListSlice, but some vendor ROMs hand back a
-                // plain ArrayList — handle both.
+                // AOSP returns ParceledListSlice; some vendor ROMs return ArrayList.
                 val list = when (tasks) {
                     is List<*> -> tasks
                     else -> XposedHelpers.callMethod(tasks, "getList") as? List<*> ?: continue
@@ -161,7 +101,6 @@ object SystemHook {
                 val task = list.firstOrNull() ?: continue
                 val top = XposedHelpers.getObjectField(task, "topActivity") as? ComponentName
                     ?: continue
-                XposedBridge.log("$TAG top activity: ${top.packageName}")
                 return top.packageName
             } catch (t: Throwable) {
                 XposedBridge.log("$TAG top-activity via $className failed: ${t.message}")
@@ -169,36 +108,4 @@ object SystemHook {
         }
         return null
     }
-
-    /** Emulate a camera shutter key (down + up) delivered to the focused window. */
-    private fun triggerShutter() {
-        val now = SystemClock.uptimeMillis()
-        if (now - lastTrigger < 300) {
-            XposedBridge.log("$TAG trigger throttled")
-            return
-        }
-        lastTrigger = now
-
-        try {
-            val im = XposedHelpers.callStaticMethod(InputManager::class.java, "getInstance")
-            XposedHelpers.callMethod(im, "injectInputEvent", cameraKey(KeyEvent.ACTION_DOWN, now), 0)
-            XposedHelpers.callMethod(im, "injectInputEvent", cameraKey(KeyEvent.ACTION_UP, now), 0)
-            XposedBridge.log("$TAG injected KEYCODE_CAMERA into the focused window")
-        } catch (t: Throwable) {
-            XposedBridge.log("$TAG injection failed: ${t.message}")
-        }
-    }
-
-    private fun cameraKey(action: Int, now: Long) = KeyEvent(
-        now,
-        now,
-        action,
-        KeyEvent.KEYCODE_CAMERA,
-        0,
-        0,
-        KeyCharacterMap.VIRTUAL_KEYBOARD,
-        0,
-        0,
-        InputDevice.SOURCE_KEYBOARD,
-    )
 }

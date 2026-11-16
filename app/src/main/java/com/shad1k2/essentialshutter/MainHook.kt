@@ -24,18 +24,7 @@ class MainHook : IXposedHookLoadPackage {
     companion object {
         const val CAMERA_PACKAGE = "com.nothing.camera"
 
-        /** Packages that implement the Essential Space side of the Essential Key. */
-        const val RECORDER_PACKAGE = "com.nothing.ntessentialrecorder"
-        const val SPACE_PACKAGE = "com.nothing.ntessentialspace"
-
-        /**
-         * Transparent activity the system launches when the key is pressed.
-         * Device logs show the launch goes through system_server regardless of
-         * whether the Essential Space packages are disabled.
-         */
-        const val FOCUS_ACTIVITY = "FocusActivity"
-
-        /** Legacy scan code of the Essential Key (keyCode 0 / KEYCODE_UNKNOWN). Kept for logging. */
+        /** Essential Key scan code (arrives with keyCode 0 / KEYCODE_UNKNOWN). */
         const val SCAN_ESSENTIAL = 250
     }
 }
