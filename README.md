@@ -39,7 +39,9 @@ Xposed (LSPosed) module that turns the **Essential Key** on Nothing Phone (3a / 
 
 ## Settings
 
-Open the module in LSPosed → **Launch**:
+Open the module in LSPosed → **Launch**. The screen uses Nothing OS styling: NDot
+dot-matrix wordmark and section labels, Geist body text and Geist Mono metadata on a
+dark `#1B1B1D` / red `#D71921` Material 3 palette.
 
 - Module enabled
 - Only remap in camera foreground
