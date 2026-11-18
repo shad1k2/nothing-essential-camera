@@ -1,4 +1,60 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="AppTheme" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/nt_red</item>
+        <item name="colorOnPrimary">@color/nt_text</item>
+        <item name="colorPrimaryContainer">@color/nt_red_dark</item>
+        <item name="colorOnPrimaryContainer">@color/nt_text</item>
+        <item name="colorSecondary">@color/nt_red</item>
+        <item name="colorOnSecondary">@color/nt_text</item>
+
+        <item name="android:colorBackground">@color/nt_bg</item>
+        <item name="colorSurface">@color/nt_surface</item>
+        <item name="colorSurfaceContainer">@color/nt_surface_2</item>
+        <item name="colorOnSurface">@color/nt_text</item>
+        <item name="colorOnSurfaceVariant">@color/nt_text_dim</item>
+        <item name="colorOutline">@color/nt_outline</item>
+
+        <item name="android:windowBackground">@color/nt_bg</item>
+        <item name="android:statusBarColor">@color/nt_bg</item>
+        <item name="android:navigationBarColor">@color/nt_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+
+        <item name="android:fontFamily">@font/geist_regular</item>
+        <item name="fontFamily">@font/geist_regular</item>
+    </style>
+
+    <!-- Dot-matrix display type: used for the wordmark and section labels. -->
+    <style name="NdotHeadline">
+        <item name="android:fontFamily">@font/ndot_57</item>
+        <item name="android:textColor">@color/nt_text</item>
+        <item name="android:textSize">26sp</item>
+        <item name="android:letterSpacing">0.02</item>
+    </style>
+
+    <style name="NdotSection">
+        <item name="android:fontFamily">@font/ndot55_caps</item>
+        <item name="android:textColor">@color/nt_red</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:letterSpacing">0.04</item>
+    </style>
+
+    <style name="GeistBody">
+        <item name="android:fontFamily">@font/geist_regular</item>
+        <item name="android:textColor">@color/nt_text</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+
+    <style name="GeistDim">
+        <item name="android:fontFamily">@font/geist_regular</item>
+        <item name="android:textColor">@color/nt_text_dim</item>
+        <item name="android:textSize">13sp</item>
+    </style>
+
+    <style name="GeistMonoMeta">
+        <item name="android:fontFamily">@font/geist_mono_regular</item>
+        <item name="android:textColor">@color/nt_text_dim</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:letterSpacing">0.06</item>
+    </style>
 </resources>

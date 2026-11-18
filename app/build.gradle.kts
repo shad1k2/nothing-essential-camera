@@ -36,4 +36,5 @@ dependencies {
     // Provided by LSPosed at runtime. Note: de.robv.android.xposed:service is NOT
     // published anywhere for v82 — do not add it back.
     compileOnly("de.robv.android.xposed:api:82")
+    implementation("com.google.android.material:material:1.12.0")
 }
